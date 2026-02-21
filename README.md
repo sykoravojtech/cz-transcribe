@@ -69,6 +69,10 @@ Accepts any audio/video format (wav, mp3, m4a, mp4, mkv, ...).
 
 When using `-d`, speaker labels (Speaker A, Speaker B, ...) are prepended to each segment. Both a plain and a diarized output file are written.
 
+## Simple version (no diarization, no token)
+
+If you just need plain text transcription without speaker labels, see the [`simple/`](simple/) folder. It's a single self-contained Python file that works on Windows, macOS, and Linux with no HuggingFace token or GPU required.
+
 ## Hardware
 
 - NVIDIA GPU with CUDA 12 recommended (runs in float16, ~6 GB VRAM)
