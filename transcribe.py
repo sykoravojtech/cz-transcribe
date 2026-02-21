@@ -15,11 +15,14 @@ def _preload_cuda_libs():
         import nvidia.cublas
         import nvidia.cudnn
 
+        skip = {"libnvblas"}
         for lib_dir in [
             Path(nvidia.cublas.__path__[0]) / "lib",
             Path(nvidia.cudnn.__path__[0]) / "lib",
         ]:
             for so in sorted(lib_dir.glob("*.so*")):
+                if any(s in so.name for s in skip):
+                    continue
                 try:
                     ctypes.CDLL(str(so), mode=ctypes.RTLD_GLOBAL)
                 except OSError:
@@ -36,8 +39,17 @@ from faster_whisper import WhisperModel  # noqa: E402
 
 DEFAULT_MODEL = "large-v3"
 DEFAULT_LANGUAGE = "cs"
-DIARIZATION_MODEL = "pyannote/speaker-diarization-3.1"
+DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
 OUTPUT_DIR = Path(__file__).parent / "output"
+
+# Load HF_TOKEN from .env if not already in environment
+if not os.environ.get("HF_TOKEN"):
+    _env_file = Path(__file__).parent / ".env"
+    if _env_file.exists():
+        for _line in _env_file.read_text().splitlines():
+            if _line.startswith("HF_TOKEN="):
+                os.environ["HF_TOKEN"] = _line.split("=", 1)[1].strip()
+                break
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +111,8 @@ def _check_models_cached(whisper_model: str, diarize: bool) -> bool:
         return False
 
     if diarize:
-        seg = try_to_load_from_cache("pyannote/segmentation-3.0", "pytorch_model.bin")
-        emb = try_to_load_from_cache("pyannote/wespeaker-voxceleb-resnet34-LM", "pytorch_model.bin")
-        if not (isinstance(seg, str) and isinstance(emb, str)):
+        dia = try_to_load_from_cache(DIARIZATION_MODEL, "config.yaml")
+        if not isinstance(dia, str):
             return False
 
     return True
@@ -173,6 +184,29 @@ def transcribe(
 # Speaker diarization
 # ---------------------------------------------------------------------------
 
+def _to_wav(input_path: str) -> str | None:
+    """Convert to 16kHz mono WAV in a temp file if the input isn't already WAV.
+    Returns the temp path, or None if no conversion was needed."""
+    if input_path.lower().endswith(".wav"):
+        return None
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    tmp.close()
+
+    with av.open(input_path) as in_container:
+        in_stream = in_container.streams.audio[0]
+        with av.open(tmp.name, "w") as out_container:
+            out_stream = out_container.add_stream("pcm_s16le", rate=16000, layout="mono")
+            for frame in in_container.decode(in_stream):
+                frame.pts = None
+                for packet in out_stream.encode(frame):
+                    out_container.mux(packet)
+            for packet in out_stream.encode(None):
+                out_container.mux(packet)
+    return tmp.name
+
+
 def diarize(input_path: str, device: str = "auto") -> list[dict]:
     """Run pyannote speaker diarization. Returns list of {start, end, speaker}."""
     import torch
@@ -181,27 +215,29 @@ def diarize(input_path: str, device: str = "auto") -> list[dict]:
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    if not os.environ.get("HF_TOKEN"):
-        env_file = Path(__file__).parent / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                if line.startswith("HF_TOKEN="):
-                    os.environ["HF_TOKEN"] = line.split("=", 1)[1].strip()
-                    break
+    hf_token = os.environ.get("HF_TOKEN")
 
     print("Loading diarization model...", file=sys.stderr)
     t0 = time.time()
-    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL)
+    pipeline = Pipeline.from_pretrained(DIARIZATION_MODEL, token=hf_token)
     pipeline.to(torch.device(device))
     print(f"  Loaded in {time.time() - t0:.1f}s", file=sys.stderr)
 
+    wav_path = _to_wav(input_path)
+    audio_for_diarize = wav_path or input_path
+
     print("Identifying speakers...", file=sys.stderr)
     t0 = time.time()
-    result = pipeline(input_path)
+    result = pipeline(audio_for_diarize)
     print(f"  Done in {format_duration(time.time() - t0)}\n", file=sys.stderr)
 
+    if wav_path:
+        os.unlink(wav_path)
+
+    annotation = getattr(result, "speaker_diarization", result)
+
     turns = []
-    for turn, _track, speaker in result.itertracks(yield_label=True):
+    for turn, _track, speaker in annotation.itertracks(yield_label=True):
         turns.append({"start": turn.start, "end": turn.end, "speaker": speaker})
     return turns
 
@@ -348,6 +384,21 @@ def main():
         turns = diarize(str(input_path), device=args.device)
         segments = assign_speakers(segments, turns)
         segments = normalize_speaker_labels(segments)
+
+        # Write both: plain text + diarized text
+        if args.output != "-":
+            plain_segments = [{k: v for k, v in s.items() if k != "speaker"} for s in segments]
+            plain_path = resolve_output_path(args.input, None, args.format)
+            if plain_path:
+                plain_path.write_text(FORMATTERS[args.format](plain_segments), encoding="utf-8")
+                print(f"  Output written to {plain_path}", file=sys.stderr)
+
+            diarized_ext = f"diarized.{args.format}"
+            diarized_path = resolve_output_path(args.input, None, diarized_ext)
+            if diarized_path:
+                diarized_path.write_text(FORMATTERS[args.format](segments), encoding="utf-8")
+                print(f"  Output written to {diarized_path}", file=sys.stderr)
+            return
 
     formatter = FORMATTERS[args.format]
     result = formatter(segments)

@@ -14,17 +14,22 @@ uv sync
 
 The diarization model requires accepting the license on HuggingFace:
 
-1. Accept terms at https://huggingface.co/pyannote/speaker-diarization-3.1
-2. Accept terms at https://huggingface.co/pyannote/segmentation-3.0
-3. Create a token at https://huggingface.co/settings/tokens
+1. Accept terms at https://huggingface.co/pyannote/speaker-diarization-community-1
+2. Create a token at https://huggingface.co/settings/tokens
 
-Run once with the token to download the models (~32 MB):
+Add the token to `.env`:
 
 ```bash
-HF_TOKEN=hf_your_token uv run transcribe.py input/file.wav -d
+echo "HF_TOKEN=hf_your_token" > .env
 ```
 
-After this first run, the token is no longer needed -- models are cached locally and the script runs fully offline.
+Run once to download the models (~32 MB):
+
+```bash
+uv run transcribe.py input/file.wav -d
+```
+
+After this first run, models are cached locally and the script runs fully offline.
 
 ## Usage
 
