@@ -1,0 +1,27 @@
+[project]
+name = "cz-transcribe"
+version = "0.1.0"
+description = "Local offline Czech speech-to-text transcription"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "faster-whisper",
+    "pyannote.audio>=3.1,<4",
+    "numpy<2",
+    "huggingface-hub<1",
+    "torch>=2.1,<2.6",
+    "torchaudio>=2.1,<2.6",
+    "setuptools<81",
+]
+
+[project.scripts]
+transcribe = "transcribe:main"
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
