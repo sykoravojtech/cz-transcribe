@@ -15,3 +15,5 @@ wheels/
 # Audio/video input and transcription output
 input/
 output/
+
+CLAUDE.md
